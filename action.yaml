@@ -1,0 +1,101 @@
+name: "Sync Knowledge Source"
+description: "Sincroniza arquivos locais com um Knowledge Source na StackSpot"
+inputs:
+  ks_slug:
+    description: "Slug do Knowledge Source"
+    required: true
+  files_dir:
+    description: "Diretório com os arquivos a serem sincronizados"
+    required: true
+  client_id:
+    description: "Client ID para autenticação"
+    required: true
+  client_secret:
+    description: "Client Secret para autenticação"
+    required: true
+  realm:
+    description: "Realm usado no login"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Setup jq and curl
+      shell: bash
+      run: |
+        sudo apt-get update && sudo apt-get install -y jq curl
+
+    - name: Authenticate and export JWT
+      shell: bash
+      run: |
+        export JWT=$(curl -s "https://idm.stackspot.com/${{ inputs.realm }}/oidc/oauth/token" \
+          -H 'Content-Type: application/x-www-form-urlencoded' \
+          -d 'grant_type=client_credentials' \
+          -d "client_id=${{ inputs.client_id }}" \
+          -d "client_secret=${{ inputs.client_secret }}" \
+        | jq -r '.access_token')
+        echo "JWT=$JWT" >> $GITHUB_ENV
+
+    - name: Sync Knowledge Source
+      shell: bash
+      run: |
+        KS_OBJECTS=$(curl -s -X GET "https://data-integration-api.stackspot.com/v1/knowledge-sources/${{ inputs.ks_slug }}/objects" \
+          -H "Authorization: Bearer $JWT")
+
+        FILES_ON_REPO=$(find "${{ inputs.files_dir }}" -type f)
+        for file in $FILES_ON_REPO; do
+          REL_PATH=$(realpath --relative-to="${{ inputs.files_dir }}" "$file")
+          FILE_NAME=$(echo "$REL_PATH" | sed 's/\//-/g')
+          
+          CHECKSUM=$(sha256sum "$file" | awk '{print $1}')
+          EXISTING=$(echo "$KS_OBJECTS" | jq -r --arg name "$REL_PATH" '.[] | select(.file_path == $name)')
+
+          if [ -n "$EXISTING" ]; then
+            KS_CHECKSUM=$(echo "$EXISTING" | jq -r '.checksum')
+            KS_ID=$(echo "$EXISTING" | jq -r '.id')
+            if [ "$KS_CHECKSUM" == "$CHECKSUM" ]; then
+              echo "🔁 $REL_PATH está atualizado, ignorando"
+              continue
+            else
+              echo "⬆️ Atualizando $REL_PATH"
+            fi
+          else
+            echo "🆕 Adicionando novo objeto $REL_PATH"
+          fi
+
+          upload_data=$(curl -s -X POST 'https://data-integration-api.stackspot.com/v2/file-upload/form' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $JWT" \
+            -d "{\"file_name\": \"$FILE_NAME\", \"target_id\": \"${{ inputs.ks_slug }}\", \"target_type\": \"KNOWLEDGE_SOURCE\", \"expiration\": 600 }")
+
+          echo "📤 Enviando $file"
+          curl -s -X POST "$(echo "$upload_data" | jq -r '.url')" \
+            -F "key=$(echo "$upload_data" | jq -r '.form.key')" \
+            -F "x-amz-algorithm=$(echo "$upload_data" | jq -r '.form["x-amz-algorithm"]')" \
+            -F "x-amz-credential=$(echo "$upload_data" | jq -r '.form["x-amz-credential"]')" \
+            -F "x-amz-date=$(echo "$upload_data" | jq -r '.form["x-amz-date"]')" \
+            -F "x-amz-security-token=$(echo "$upload_data" | jq -r '.form["x-amz-security-token"]')" \
+            -F "policy=$(echo "$upload_data" | jq -r '.form.policy')" \
+            -F "x-amz-signature=$(echo "$upload_data" | jq -r '.form["x-amz-signature"]')" \
+            -F "file=@\"$file\""
+
+          FILE_ID=$(echo "$upload_data" | jq -r '.id')
+          curl -s -X POST "https://data-integration-api.stackspot.com/v1/file-upload/$FILE_ID/knowledge-objects" \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $JWT" \
+            -d '{ "split_strategy": "NONE", "split_quantity": 500, "split_overlap": 50 }'
+        done
+
+        # Deleção de arquivos que estão no KS mas não no repositório
+        for row in $(echo "$KS_OBJECTS" | jq -r '.[] | @base64'); do
+          _jq() {
+            echo "${row}" | base64 --decode | jq -r "${1}"
+          }
+
+          FILE_PATH=$(_jq '.file_path')
+          if ! echo "$FILES_ON_REPO" | grep -q "$FILE_PATH"; then
+            KS_ID=$(_jq '.id')
+            echo "❌ Removendo objeto obsoleto: $FILE_PATH"
+            curl -s -X DELETE "https://data-integration-api.stackspot.com/v1/knowledge-sources/${{ inputs.ks_slug }}/objects/$KS_ID" \
+              -H "Authorization: Bearer $JWT"
+          fi
+        done
