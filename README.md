@@ -276,4 +276,4 @@ Contribuições são bem-vindas! Por favor:
 
 ## 🏅 **Licença**
 
-Esse repositório usa a licença [Apache License 2.0](https://github.com/victorsilvazup/sync-knowledge-source/blob/main/LICENSE)
+Esse repositório usa a licença [Apache 2.0](https://github.com/victorsilvazup/sync-knowledge-source/blob/main/LICENSE)
