@@ -273,3 +273,7 @@ Contribuições são bem-vindas! Por favor:
 3. Commit suas mudanças (`git commit -m 'Add amazing feature'`)
 4. Push para a branch (`git push origin feature/amazing-feature`)
 5. Abra um Pull Request
+
+## 🏅 **Licença**
+
+Esse repositório usa a licença [Apache License 2.0](https://github.com/victorsilvazup/sync-knowledge-source/blob/main/LICENSE)
