@@ -1,5 +1,11 @@
 name: "Sync Knowledge Source"
 description: "Sincroniza arquivos locais com um Knowledge Source na StackSpot"
+author: "Victor Domenicali da Silva"
+
+branding:
+  icon: "upload-cloud"
+  color: "blue"
+
 inputs:
   ks_slug:
     description: "Slug do Knowledge Source"
@@ -16,24 +22,62 @@ inputs:
   realm:
     description: "Realm usado no login"
     required: true
+  max_workers:
+    description: "Número máximo de workers para upload paralelo"
+    required: false
+    default: "5"
+  retry_count:
+    description: "Número de tentativas em caso de erro"
+    required: false
+    default: "3"
+
+outputs:
+  status:
+    description: "Status da sincronização"
+    value: ${{ steps.sync.outputs.status }}
+  files_uploaded:
+    description: "Número de arquivos enviados"
+    value: ${{ steps.sync.outputs.files_uploaded }}
+  files_deleted:
+    description: "Número de arquivos removidos"
+    value: ${{ steps.sync.outputs.files_deleted }}
+
 runs:
   using: "composite"
   steps:
     - name: Setup Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
-
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
     - name: Install dependencies
       shell: bash
-      run: pip install requests
-
-    - name: Run sync script
-      shell: bash
       run: |
-        export KS_SLUG=${{ inputs.ks_slug }}
-        export FILES_DIR=${{ inputs.files_dir }}
-        export CLIENT_ID=${{ inputs.client_id }}
-        export CLIENT_SECRET=${{ inputs.client_secret }}
-        export REALM=${{ inputs.realm }}
-        python3 ${{ github.action_path }}/sync_ks.py
+        python -m pip install --upgrade pip
+        pip install requests
+        # Se você tiver um requirements.txt na action:
+        if [ -f "${{ github.action_path }}/requirements.txt" ]; then
+          pip install -r "${{ github.action_path }}/requirements.txt"
+        fi
+    
+    - name: Run sync script
+      id: sync
+      shell: bash
+      env:
+        KS_SLUG: ${{ inputs.ks_slug }}
+        FILES_DIR: ${{ inputs.files_dir }}
+        CLIENT_ID: ${{ inputs.client_id }}
+        CLIENT_SECRET: ${{ inputs.client_secret }}
+        REALM: ${{ inputs.realm }}
+        MAX_WORKERS: ${{ inputs.max_workers }}
+        RETRY_COUNT: ${{ inputs.retry_count }}
+        PYTHONUNBUFFERED: "1"
+      run: python "${{ github.action_path }}/sync_ks.py"

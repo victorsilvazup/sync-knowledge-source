@@ -360,24 +360,30 @@ def load_config() -> Config:
 def main() -> None:
     """Função principal."""
     try:
-        # Carrega configuração
-        config = load_config()
+        # ... código existente ...
         
-        # Valida diretório de arquivos
-        if not config.files_dir.exists():
-            logger.error(f"❌ Diretório não encontrado: {config.files_dir}")
-            sys.exit(1)
-            
-        # Inicializa cliente e sincronizador
-        client = StackSpotClient(config)
-        synchronizer = FileSynchronizer(config, client)
-        
-        # Executa sincronização
-        synchronizer.sync()
-        
-        # Define output para GitHub Actions
+        # Define outputs para GitHub Actions
         if os.environ.get("GITHUB_ACTIONS"):
-            print(f"::set-output name=status::success")
+            # Usando o novo formato de outputs
+            output_file = os.environ.get("GITHUB_OUTPUT")
+            if output_file:
+                with open(output_file, "a") as f:
+                    f.write(f"status=success\n")
+                    f.write(f"files_uploaded={len(to_upload)}\n")
+                    f.write(f"files_deleted={len(to_delete)}\n")
             
-    except APIError as e:
-        logger.error(f"❌ Erro de API: {e}")
+            # Adiciona summary
+            summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary_file:
+                with open(summary_file, "a") as f:
+                    f.write("## 📊 Resultado da Sincronização\n\n")
+                    f.write(f"- ✅ Status: Sucesso\n")
+                    f.write(f"- 📤 Arquivos enviados: {len(to_upload)}\n")
+                    f.write(f"- 🗑️ Arquivos removidos: {len(to_delete)}\n")
+                    f.write(f"- 📁 Total de arquivos: {len(local_files)}\n")
+                    
+    except Exception as e:
+        logger.error(f"❌ Erro: {e}")
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(f"::error::Sincronização falhou: {e}")
+        sys.exit(1)
