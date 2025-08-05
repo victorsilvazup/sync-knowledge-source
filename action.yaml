@@ -38,15 +38,19 @@ runs:
     - name: Sync Knowledge Source
       shell: bash
       run: |
+        # Busca os objetos existentes no KS
         KS_OBJECTS=$(curl -s -X GET "https://data-integration-api.stackspot.com/v1/knowledge-sources/${{ inputs.ks_slug }}/objects" \
           -H "Authorization: Bearer $JWT")
 
-        FILES_ON_REPO=$(find "${{ inputs.files_dir }}" -type f)
-        for file in $FILES_ON_REPO; do
-          REL_PATH=$(realpath --relative-to="${{ inputs.files_dir }}" "$file")
-          FILE_NAME=$(echo "$REL_PATH" | sed 's/\//-/g')
+        # Lista os arquivos locais (relativos ao diretório base)
+        FILES_ON_REPO=$(find "${{ inputs.files_dir }}" -type f | sed "s|^${{ inputs.files_dir }}/||")
+
+        # Loop pelos arquivos locais
+        while IFS= read -r REL_PATH; do
+          FILE_PATH="${{ inputs.files_dir }}/$REL_PATH"
+          FILE_NAME="$REL_PATH"
           
-          CHECKSUM=$(sha256sum "$file" | awk '{print $1}')
+          CHECKSUM=$(sha256sum "$FILE_PATH" | awk '{print $1}')
           EXISTING=$(echo "$KS_OBJECTS" | jq -r --arg name "$REL_PATH" '.[] | select(.file_path == $name)')
 
           if [ -n "$EXISTING" ]; then
@@ -67,7 +71,7 @@ runs:
             -H "Authorization: Bearer $JWT" \
             -d "{\"file_name\": \"$FILE_NAME\", \"target_id\": \"${{ inputs.ks_slug }}\", \"target_type\": \"KNOWLEDGE_SOURCE\", \"expiration\": 600 }")
 
-          echo "📤 Enviando $file"
+          echo "📤 Enviando $FILE_PATH"
           curl -s -X POST "$(echo "$upload_data" | jq -r '.url')" \
             -F "key=$(echo "$upload_data" | jq -r '.form.key')" \
             -F "x-amz-algorithm=$(echo "$upload_data" | jq -r '.form["x-amz-algorithm"]')" \
@@ -76,24 +80,26 @@ runs:
             -F "x-amz-security-token=$(echo "$upload_data" | jq -r '.form["x-amz-security-token"]')" \
             -F "policy=$(echo "$upload_data" | jq -r '.form.policy')" \
             -F "x-amz-signature=$(echo "$upload_data" | jq -r '.form["x-amz-signature"]')" \
-            -F "file=@\"$file\""
+            -F "file=@\"$FILE_PATH\""
 
           FILE_ID=$(echo "$upload_data" | jq -r '.id')
           curl -s -X POST "https://data-integration-api.stackspot.com/v1/file-upload/$FILE_ID/knowledge-objects" \
             -H 'Content-Type: application/json' \
             -H "Authorization: Bearer $JWT" \
             -d '{ "split_strategy": "NONE", "split_quantity": 500, "split_overlap": 50 }'
-        done
 
-        # Deleção de arquivos que estão no KS mas não no repositório
+        done <<< "$FILES_ON_REPO"
+
+        # Deleção de arquivos obsoletos
         for row in $(echo "$KS_OBJECTS" | jq -r '.[] | @base64'); do
           _jq() {
             echo "${row}" | base64 --decode | jq -r "${1}"
           }
 
           FILE_PATH=$(_jq '.file_path')
-          if ! echo "$FILES_ON_REPO" | grep -q "$FILE_PATH"; then
-            KS_ID=$(_jq '.id')
+          KS_ID=$(_jq '.id')
+
+          if ! grep -qx "$FILE_PATH" <<< "$FILES_ON_REPO"; then
             echo "❌ Removendo objeto obsoleto: $FILE_PATH"
             curl -s -X DELETE "https://data-integration-api.stackspot.com/v1/knowledge-sources/${{ inputs.ks_slug }}/objects/$KS_ID" \
               -H "Authorization: Bearer $JWT"
