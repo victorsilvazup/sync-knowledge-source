@@ -1,26 +1,22 @@
-name: "Sync Knowledge Source"
-description: "Sincroniza arquivos locais com um Knowledge Source na StackSpot"
-author: "Victor Domenicali da Silva"
-
-branding:
-  icon: "upload-cloud"
-  color: "blue"
+name: 'Sync Knowledge Source'
+description: 'Sincroniza arquivos locais com um Knowledge Source na StackSpot'
+author: 'Seu Nome'
 
 inputs:
   ks_slug:
-    description: "Slug do Knowledge Source"
+    description: 'Slug do Knowledge Source'
     required: true
   files_dir:
-    description: "Diretório com os arquivos a serem sincronizados"
+    description: 'Diretório com os arquivos a serem sincronizados'
     required: true
   client_id:
-    description: "Client ID para autenticação"
+    description: 'Client ID para autenticação'
     required: true
   client_secret:
-    description: "Client Secret para autenticação"
+    description: 'Client Secret para autenticação'
     required: true
   realm:
-    description: "Realm usado no login"
+    description: 'Client Realm para autenticação'
     required: true
   max_workers:
     description: "Número máximo de workers para upload paralelo"
@@ -33,41 +29,32 @@ inputs:
 
 outputs:
   status:
-    description: "Status da sincronização"
+    description: 'Status da sincronização'
     value: ${{ steps.sync.outputs.status }}
   files_uploaded:
-    description: "Número de arquivos enviados"
+    description: 'Número de arquivos enviados'
     value: ${{ steps.sync.outputs.files_uploaded }}
   files_deleted:
-    description: "Número de arquivos removidos"
+    description: 'Número de arquivos removidos'
     value: ${{ steps.sync.outputs.files_deleted }}
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        
-    - name: Cache pip dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
+
     - name: Install dependencies
       shell: bash
       run: |
+        echo "📦 Instalando dependências..."
         python -m pip install --upgrade pip
         pip install requests
-        # Se você tiver um requirements.txt na action:
-        if [ -f "${{ github.action_path }}/requirements.txt" ]; then
-          pip install -r "${{ github.action_path }}/requirements.txt"
-        fi
-    
+        echo "✅ Dependências instaladas"
+        pip list
+
     - name: Run sync script
       id: sync
       shell: bash
@@ -79,5 +66,17 @@ runs:
         REALM: ${{ inputs.realm }}
         MAX_WORKERS: ${{ inputs.max_workers }}
         RETRY_COUNT: ${{ inputs.retry_count }}
-        PYTHONUNBUFFERED: "1"
-      run: python "${{ github.action_path }}/sync_ks.py"
+        PYTHONUNBUFFERED: '1'
+        PYTHONDONTWRITEBYTECODE: '1'
+        PYTHONIOENCODING: 'utf-8'
+      run: |
+        echo "🚀 Executando script de sincronização..."
+        
+        # Executar com tratamento de erro
+        if python "${{ github.action_path }}/sync_ks.py"; then
+          echo "✅ Script executado com sucesso"
+        else
+          exit_code=$?
+          echo "❌ Script falhou com código: $exit_code"
+          exit $exit_code
+        fi

@@ -7,6 +7,20 @@ fazendo upload de arquivos novos/modificados e removendo arquivos obsoletos.
 
 import os
 import sys
+
+print("🐍 Script Python iniciado!", flush=True)
+print(f"📍 Python version: {sys.version}", flush=True)
+print(f"📁 Working directory: {os.getcwd()}", flush=True)
+print(f"🔍 Script location: {__file__}", flush=True)
+
+try:
+    import requests
+    print("✅ Módulo 'requests' importado com sucesso", flush=True)
+except ImportError as e:
+    print(f"❌ Erro ao importar 'requests': {e}", flush=True)
+    sys.exit(1)
+
+
 import json
 import logging
 import hashlib
@@ -16,17 +30,35 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin
-
-import requests
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from urllib3.util.retry import Retry
+
+print("✅ Todos os imports realizados com sucesso", flush=True)
+
+class FlushHandler(logging.StreamHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG if os.environ.get("RUNNER_DEBUG") == "1" else logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[FlushHandler(sys.stdout)]
 )
+
 logger = logging.getLogger(__name__)
+logger.info("📊 Sistema de logging configurado")
+logger.info("🔍 Verificando variáveis de ambiente...")
+env_vars = ["KS_SLUG", "FILES_DIR", "CLIENT_ID", "CLIENT_SECRET", "REALM"]
+for var in env_vars:
+    value = os.environ.get(var)
+    if value:
+        if var in ["CLIENT_ID", "CLIENT_SECRET", "REALM"]:
+            logger.info(f"✅ {var}: [DEFINIDO - MASCARADO]")
+        else:
+            logger.info(f"✅ {var}: {value}")
+    else:
+        logger.error(f"❌ {var}: NÃO DEFINIDO")
 
 
 @dataclass
@@ -356,12 +388,143 @@ def load_config() -> Config:
 def write_github_outputs(result: SyncResult, local_files_count: int) -> None:
     """Escreve outputs para GitHub Actions."""
     if not os.environ.get("GITHUB_ACTIONS"):
+        logger.info("📝 Não está rodando no GitHub Actions, pulando outputs")
         return
     
     output_file = os.environ.get("GITHUB_OUTPUT")
     if output_file:
-        with open(output_file, "a") as f:
-            f.write(f"status={result.status}\n")
-            f.write(f"files_uploaded={len(result.files_uploaded)}\n")
-            f.write(f"files_deleted={len(result.files_deleted)}\n")
-            f.write(f"local_files_count={local_files_count}\n")
+        logger.info(f"📝 Escrevendo outputs em {output_file}")
+        try:
+            with open(output_file, "a") as f:
+                f.write(f"status=success\n")
+                f.write(f"files_uploaded={len(result.files_uploaded)}\n")
+                f.write(f"files_deleted={len(result.files_deleted)}\n")
+                f.write(f"local_files_count={local_files_count}\n")
+            logger.info("✅ Outputs escritos com sucesso")
+        except Exception as e:
+            logger.error(f"❌ Erro ao escrever outputs: {e}")
+    else:
+        logger.warning("⚠️ GITHUB_OUTPUT não definido")
+
+
+def write_github_summary(result: SyncResult, local_files_count: int) -> None:
+    """Escreve summary para GitHub Actions."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_file:
+        try:
+            with open(summary_file, "a") as f:
+                f.write("## 📊 Resultado da Sincronização\n\n")
+                f.write(f"- ✅ **Status**: Sucesso\n")
+                f.write(f"- 📤 **Arquivos enviados**: {len(result.files_uploaded)}\n")
+                f.write(f"- 🗑️ **Arquivos removidos**: {len(result.files_deleted)}\n")
+                f.write(f"- 📁 **Total de arquivos locais**: {local_files_count}\n\n")
+                
+                if result.files_uploaded:
+                    f.write("### 📤 Arquivos Enviados\n")
+                    for file in result.files_uploaded[:10]:
+                        f.write(f"- `{file}`\n")
+                    if len(result.files_uploaded) > 10:
+                        f.write(f"- _...e mais {len(result.files_uploaded) - 10} arquivos_\n")
+                    f.write("\n")
+                
+                if result.files_deleted:
+                    f.write("### 🗑️ Arquivos Removidos\n")
+                    for file in result.files_deleted[:10]:
+                        f.write(f"- `{file}`\n")
+                    if len(result.files_deleted) > 10:
+                        f.write(f"- _...e mais {len(result.files_deleted) - 10} arquivos_\n")
+        except Exception as e:
+            logger.error(f"❌ Erro ao escrever summary: {e}")
+
+
+def main() -> None:
+    """Função principal."""
+    start_time = time.time()
+    
+    try:
+        logger.info("=" * 60)
+        logger.info("🚀 INICIANDO SINCRONIZAÇÃO COM KNOWLEDGE SOURCE")
+        logger.info("=" * 60)
+        config = load_config()
+        logger.info(f"📋 Knowledge Source: {config.ks_slug}")
+        logger.info(f"📁 Diretório: {config.files_dir}")
+        
+        if not config.files_dir.exists():
+            error_msg = f"Diretório não encontrado: {config.files_dir}"
+            logger.error(f"❌ {error_msg}")
+            
+            if os.environ.get("GITHUB_ACTIONS"):
+                print(f"::error::{error_msg}")
+                output_file = os.environ.get("GITHUB_OUTPUT")
+                if output_file:
+                    with open(output_file, "a") as f:
+                        f.write("status=error\n")
+                        f.write("files_uploaded=0\n")
+                        f.write("files_deleted=0\n")
+                        f.write("local_files_count=0\n")
+            
+            sys.exit(1)
+
+        logger.info("🔧 Inicializando cliente StackSpot...")
+        client = StackSpotClient(config)
+        
+        logger.info("🔧 Inicializando sincronizador...")
+        synchronizer = FileSynchronizer(config, client)
+        
+        local_files = synchronizer.get_local_files()
+        local_files_count = len(local_files)
+
+        result = synchronizer.sync()
+        
+        elapsed_time = time.time() - start_time
+        
+        logger.info("=" * 60)
+        logger.info("✅ SINCRONIZAÇÃO CONCLUÍDA COM SUCESSO!")
+        logger.info(f"⏱️  Tempo total: {elapsed_time:.2f} segundos")
+        logger.info(f"📤 Arquivos enviados: {len(result.files_uploaded)}")
+        logger.info(f"🗑️  Arquivos removidos: {len(result.files_deleted)}")
+        logger.info(f"📁 Total de arquivos locais: {local_files_count}")
+        logger.info("=" * 60)
+        
+        write_github_outputs(result, local_files_count)
+        write_github_summary(result, local_files_count)
+        
+        if os.environ.get("GITHUB_ACTIONS"):
+            if result.files_uploaded:
+                print(f"::notice::📤 {len(result.files_uploaded)} arquivo(s) enviado(s) com sucesso")
+            if result.files_deleted:
+                print(f"::notice::🗑️ {len(result.files_deleted)} arquivo(s) removido(s)")
+        
+    except APIError as e:
+        logger.error(f"❌ Erro de API: {e}")
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(f"::error::Erro de API: {e}")
+            output_file = os.environ.get("GITHUB_OUTPUT")
+            if output_file:
+                with open(output_file, "a") as f:
+                    f.write("status=error\n")
+                    f.write("files_uploaded=0\n")
+                    f.write("files_deleted=0\n")
+                    f.write(f"local_files_count={locals().get('local_files_count', 0)}\n")
+        sys.exit(1)
+        
+    except Exception as e:
+        logger.error(f"❌ Erro inesperado: {e}")
+        logger.exception("Detalhes do erro:")
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(f"::error::Erro inesperado: {e}")
+            output_file = os.environ.get("GITHUB_OUTPUT")
+            if output_file:
+                with open(output_file, "a") as f:
+                    f.write("status=error\n")
+                    f.write("files_uploaded=0\n")
+                    f.write("files_deleted=0\n")
+                    f.write(f"local_files_count={locals().get('local_files_count', 0)}\n")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
