@@ -1,6 +1,6 @@
 name: 'Sync Knowledge Source'
 description: 'Sincroniza arquivos locais com um Knowledge Source na StackSpot'
-author: 'Seu Nome'
+author: 'Victor Domenicali da Silva'
 
 inputs:
   ks_slug:
